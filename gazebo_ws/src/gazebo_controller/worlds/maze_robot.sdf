@@ -1,6 +1,6 @@
 <?xml version="1.0" ?>
 <sdf version="1.10">
-    <world name="maze_world">
+    <world name="car_world">
         <physics name="1ms" type="ignored">
             <max_step_size>0.001</max_step_size>
             <real_time_factor>1.0</real_time_factor>
@@ -358,8 +358,8 @@
                 <topic>/cmd_vel</topic>
                 <odom_topic>/odom</odom_topic>
                 <tf_topic>/tf</tf_topic>
-                <frame_id>odom</frame_id>
-                <child_frame_id>chassis</child_frame_id>
+                <frame_id>car_world</frame_id>
+                <child_frame_id>vehicle_blue/chassis</child_frame_id>
             </plugin>
 
             <!-- Joint State Publisher Plugin (for RViz2 wheel visualization) -->

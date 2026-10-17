@@ -1,0 +1,19 @@
+services:
+  gazebo_controller:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gazebo_controller
+    ports:
+      - "6080:80"
+      - "8888:8888"
+    environment:
+      - DISPLAY=${DISPLAY:-host.docker.internal:0.0}
+      - QT_X11_NO_MITSHM=1
+    volumes:
+      - .:/ros2_ws
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    security_opt:
+      - seccomp:unconfined
+    shm_size: "2gb"
+    restart: unless-stopped

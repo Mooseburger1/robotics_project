@@ -9,9 +9,12 @@ from geometry_msgs.msg import Twist, PoseStamped
 from tf2_ros import Buffer, TransformListener, TransformException
 
 
+
+
 class DiffDrivePID(Node):
     def __init__(self):
         super().__init__('diffdrive_pid')
+
 
         # Read chassis length from worlds/maze_robot.sdf (fallback to 2.0m -> l = 1.0m)
         self.l = 1.0
@@ -25,6 +28,7 @@ class DiffDrivePID(Node):
                 self.l = chassis_length / 2.0
         except Exception as e:
             self.get_logger().warn(f'Using default offset l=1.0m (could not parse SDF: {e})')
+
 
         # Declare tunable PD parameters with GUI slider ranges
         self.declare_parameter(
@@ -56,16 +60,20 @@ class DiffDrivePID(Node):
             )
         )
 
-        # Target goal [x_g, y_g] in odom frame
+
+        # Target goal [x_g, y_g]
         self.goal = None
 
-        # Virtual point state
+
+        # Virtual point state for smoothed finite-difference velocity
         self.prev_vp_pos = None
         self.vp_vel = np.array([0.0, 0.0], dtype=float)
 
-        # TF2 buffer & listener (tracks odom -> chassis published by Gazebo DiffDrive)
+
+        # TF2 buffer & listener
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
+
 
         # Subscribe to /goal_pose (from RViz2 2D Goal Pose tool)
         self.goal_sub = self.create_subscription(
@@ -75,6 +83,16 @@ class DiffDrivePID(Node):
             15
         )
 
+
+        # Subscribe to /teleop_cmd_vel so any keypress cancels active goal and drives immediately
+        self.teleop_sub = self.create_subscription(
+            Twist,
+            '/teleop_cmd_vel',
+            self.teleop_callback,
+            15
+        )
+
+
         # Publish velocity commands to /cmd_vel (bridged to Gazebo)
         self.cmd_vel_pub = self.create_publisher(
             Twist,
@@ -82,13 +100,16 @@ class DiffDrivePID(Node):
             15
         )
 
+
         # 30 Hz control loop
         self.dt = 1.0 / 30.0
         self.timer = self.create_timer(self.dt, self.timer_callback)
 
+
         self.get_logger().info(
             f'Gazebo DiffDrivePID started at 30 Hz (trailer-hitch offset l={self.l}m).'
         )
+
 
     def goal_pose_callback(self, msg: PoseStamped):
         x_g = msg.pose.position.x
@@ -96,19 +117,36 @@ class DiffDrivePID(Node):
         self.goal = np.array([x_g, y_g], dtype=float)
         self.get_logger().info(f'New goal received: ({x_g:.3f}, {y_g:.3f})')
 
+
+    def teleop_callback(self, msg: Twist):
+        if self.goal is not None:
+            self.goal = None
+            self.get_logger().info('Teleop key pressed -> canceled active 2D Goal Pose.')
+        self.cmd_vel_pub.publish(msg)
+
+
     def timer_callback(self):
-        # 1. Lookup current robot pose (odom -> chassis) from /tf
+        # 1. Lookup current robot pose from /tf
         try:
             trans = self.tf_buffer.lookup_transform(
-                'odom',
-                'chassis',
+                'car_world',
+                'vehicle_blue/chassis',
                 rclpy.time.Time()
             )
         except TransformException:
-            return
+            try:
+                trans = self.tf_buffer.lookup_transform(
+                    'odom',
+                    'chassis',
+                    rclpy.time.Time()
+                )
+            except TransformException:
+                return
+
 
         x_r = trans.transform.translation.x
         y_r = trans.transform.translation.y
+
 
         # Extract yaw angle theta_r from quaternion
         q = trans.transform.rotation
@@ -116,10 +154,12 @@ class DiffDrivePID(Node):
         cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
         theta_r = np.arctan2(siny_cosp, cosy_cosp)
 
+
         # 2. Compute virtual point (trailer hitch) position at front of robot
         x_p = x_r + self.l * np.cos(theta_r)
         y_p = y_r + self.l * np.sin(theta_r)
         vp_pos = np.array([x_p, y_p], dtype=float)
+
 
         # 3. Update virtual point velocity with Exponential Moving Average filter
         if self.prev_vp_pos is None:
@@ -130,22 +170,29 @@ class DiffDrivePID(Node):
             self.vp_vel = alpha * raw_vel + (1.0 - alpha) * self.vp_vel
         self.prev_vp_pos = vp_pos
 
-        # If no goal has been clicked in RViz2 yet, do nothing
+
+        # If no goal is active, do not publish anything so teleop has full control
         if self.goal is None:
             return
+
 
         # 4. Compute position error of the virtual point
         error = self.goal - vp_pos
         dist_error = float(np.linalg.norm(error))
 
+
         cmd_msg = Twist()
 
-        # Stop once the virtual point is within the min error distance of the goal
-        if dist_error < 0.08:
+
+        # Stop cleanly once the virtual point is within 20 cm of the goal, then clear goal
+        if dist_error < 0.20:
             cmd_msg.linear.x = 0.0
             cmd_msg.angular.z = 0.0
             self.cmd_vel_pub.publish(cmd_msg)
+            self.goal = None
+            self.get_logger().info('Goal reached! Released /cmd_vel.')
             return
+
 
         # 5. Read live PD gains and compute world-frame control [ux, uy]
         kp = float(self.get_parameter('kp').value)
@@ -153,20 +200,26 @@ class DiffDrivePID(Node):
         max_v = float(self.get_parameter('max_v').value)
         max_omega = float(self.get_parameter('max_omega').value)
 
+
         ux = kp * error[0] - kd * self.vp_vel[0]
         uy = kp * error[1] - kd * self.vp_vel[1]
+
 
         # 6. Map [ux, uy] to differential drive commands [v_f, omega]
         v_f = np.cos(theta_r) * ux + np.sin(theta_r) * uy
         omega = (-np.sin(theta_r) * ux + np.cos(theta_r) * uy) / self.l
 
+
         # Clamp to realistic velocity limits
         v_f = np.clip(v_f, -max_v, max_v)
         omega = np.clip(omega, -max_omega, max_omega)
 
+
         cmd_msg.linear.x = float(v_f)
         cmd_msg.angular.z = float(omega)
         self.cmd_vel_pub.publish(cmd_msg)
+
+
 
 
 def main(args=None):
@@ -179,6 +232,8 @@ def main(args=None):
     finally:
         node.destroy_node()
         rclpy.shutdown()
+
+
 
 
 if __name__ == '__main__':
