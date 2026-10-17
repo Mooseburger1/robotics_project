@@ -126,7 +126,7 @@ class DiffDrivePID(Node):
 
 
     def timer_callback(self):
-        # 1. Lookup current robot pose from /tf
+        #  Lookup current robot pose from /tf
         try:
             trans = self.tf_buffer.lookup_transform(
                 'car_world',
@@ -155,13 +155,13 @@ class DiffDrivePID(Node):
         theta_r = np.arctan2(siny_cosp, cosy_cosp)
 
 
-        # 2. Compute virtual point (trailer hitch) position at front of robot
+        # Compute virtual point (trailer hitch) position at front of robot
         x_p = x_r + self.l * np.cos(theta_r)
         y_p = y_r + self.l * np.sin(theta_r)
         vp_pos = np.array([x_p, y_p], dtype=float)
 
 
-        # 3. Update virtual point velocity with Exponential Moving Average filter
+        # Update virtual point velocity with Exponential Moving Average filter
         if self.prev_vp_pos is None:
             self.vp_vel = np.array([0.0, 0.0], dtype=float)
         else:
@@ -176,7 +176,7 @@ class DiffDrivePID(Node):
             return
 
 
-        # 4. Compute position error of the virtual point
+        # Compute position error of the virtual point
         error = self.goal - vp_pos
         dist_error = float(np.linalg.norm(error))
 
@@ -184,7 +184,7 @@ class DiffDrivePID(Node):
         cmd_msg = Twist()
 
 
-        # Stop cleanly once the virtual point is within 20 cm of the goal, then clear goal
+        # Stop once the virtual point is within 20 cm of the goal, then clear goal
         if dist_error < 0.20:
             cmd_msg.linear.x = 0.0
             cmd_msg.angular.z = 0.0
@@ -194,7 +194,7 @@ class DiffDrivePID(Node):
             return
 
 
-        # 5. Read live PD gains and compute world-frame control [ux, uy]
+        # Read live PD gains and compute world-frame control [ux, uy]
         kp = float(self.get_parameter('kp').value)
         kd = float(self.get_parameter('kd').value)
         max_v = float(self.get_parameter('max_v').value)
@@ -205,7 +205,7 @@ class DiffDrivePID(Node):
         uy = kp * error[1] - kd * self.vp_vel[1]
 
 
-        # 6. Map [ux, uy] to differential drive commands [v_f, omega]
+        # Map [ux, uy] to differential drive commands [v_f, omega]
         v_f = np.cos(theta_r) * ux + np.sin(theta_r) * uy
         omega = (-np.sin(theta_r) * ux + np.cos(theta_r) * uy) / self.l
 
