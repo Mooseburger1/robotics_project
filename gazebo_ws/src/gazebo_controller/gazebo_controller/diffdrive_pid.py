@@ -59,7 +59,7 @@ class DiffDrivePID(Node):
         # Target goal [x_g, y_g] in odom frame
         self.goal = None
 
-        # Virtual point state for smoothed finite-difference velocity
+        # Virtual point state
         self.prev_vp_pos = None
         self.vp_vel = np.array([0.0, 0.0], dtype=float)
 
@@ -140,7 +140,7 @@ class DiffDrivePID(Node):
 
         cmd_msg = Twist()
 
-        # Stop cleanly once the virtual point is within 8 cm of the goal
+        # Stop once the virtual point is within the min error distance of the goal
         if dist_error < 0.08:
             cmd_msg.linear.x = 0.0
             cmd_msg.angular.z = 0.0
